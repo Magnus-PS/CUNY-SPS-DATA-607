@@ -28,6 +28,10 @@ knitr::opts_chunk$set(eval = TRUE, results = TRUE, fig.show = "asis", message = 
 library(tidyverse)
 library(knitr)
 library(R.utils)
+library(DT)
+library(tm)
+library(wordcloud)
+library(data.table)
 ```
 
 ### Background
@@ -46,9 +50,8 @@ We lean on the R.utils library to *automatically* download, bunzip, extract the 
 #untar("20050311_spam_2.tar", exdir="emails")
 
 #Create corresponding list of file names for spam_2 and exclude cmds file
+if (file.exists("emails\\spam_2\\cmds")) file.remove("emails\\spam_2\\cmds")
 spam_list = list.files("emails\\spam_2\\") 
-spam_list = spam_list[which(spam_list!="cmds")]
-
 
 #Download, bunzip, and untar easy_ham files into "emails" directory
 #download.file("http://spamassassin.apache.org/old/publiccorpus/20030228_easy_ham.tar.bz2", destfile="20030228_easy_ham.tar.bz2")
@@ -56,21 +59,150 @@ spam_list = spam_list[which(spam_list!="cmds")]
 #untar("20030228_easy_ham.tar", exdir = "emails")
 
 #Create corresponding list of file names for easy_ham and exclude cmds file
+if (file.exists("emails\\easy_ham\\cmds")) file.remove("emails\\easy_ham\\cmds")
 ham_list = list.files("emails\\easy_ham\\")
-ham_list=ham_list[which(ham_list!="cmds")]
 
+```
+
+
+#### Get the insights
+
+
+Check the length and the contents
+
+```{r}
+
+length(spam_list)
+
+```
+
+```{r}
+length(ham_list)
+```
+
+
+Data frame
+
+```{r}
+# Build data frame
+
+df_mails <- tibble()
+df_mails_folders <- c("emails\\spam_2\\", "emails\\easy_ham")
+df_mails_types <- c("spam", "ham")
+
+```
+
+
+```{r}
+
+
+# For loop to feed the data frame
+
+for (i in 1: length(df_mails_folders))
+  
+  {
+        tag <- df_mails_types[i]
+        
+        l <- tibble(file = dir(df_mails_folders[i],  full.names = TRUE)) %>% 
+          
+          mutate(messages = map(file, read_lines)) %>%
+          
+                transmute(id = basename(file), tag = tag, messages) %>%
+                unnest(messages)
+                df_mails<- bind_rows(df_mails, l)
+ }
+```
+
+
+
+```{r}
+
+# Build the table with only tag and messages
+# Concatenate the message to be as a single string for a given id
+
+new_df <- df_mails[!duplicated(df_mails$id), ]
+new_df[, 'messages'] <- aggregate (messages~id, data = df_mails, toString) [,2]
+
+head(new_df)
+
+```
+
+
+```{r}
+
+# Subset the data frame with only tag and messages 
+
+df_final <- new_df %>%
+  select(tag, messages)
+
+dim(df_final)
 ```
 
 We now character vectors of file names available as spam_list and ham_list. From these lists, we want to create a corpus of training and then test documents. In order to do so ...
 
 ### Creation of Corpus
 
+
+#### Creating corpus
+
 Writing
 
 ```{r}
-#code
+
+# Create corpus from all the messages
+
+text_corpus <- Corpus(VectorSource(df_final$messages))
+print(text_corpus)
 
 ```
+
+
+#### Cleaning corpus
+
+Writing
+
+```{r}
+
+# remove punctuation
+clean_corpus <- tm_map(text_corpus, removePunctuation)
+
+clean_corpus<- tm_map(text_corpus,content_transformer(gsub), pattern="\\W",replace=" ")
+removeURL <- function(x) gsub("http^\\s\\s*", "", x)%>% 
+clean_corpus <- tm_map(clean_corpus, content_transformer(removeURL))
+# remove numbers
+clean_corpus <- tm_map(clean_corpus, removeNumbers)
+
+
+## remove stop words
+clean_corpus <- tm_map(clean_corpus, removeWords, stopwords())
+## remove whitespace
+clean_corpus <- tm_map(clean_corpus, stripWhitespace)
+
+#translate all letters to lower case
+clean_corpus <- tm_map(clean_corpus, tolower)
+
+```
+
+#### Creation of Term Document Matrix
+
+```{r}
+# Corpus insights
+
+text_final <- TermDocumentMatrix(clean_corpus)
+text_final
+
+```
+
+```{r}
+# Reduce sparsity 
+
+text_final <- text_final %>% 
+  removeSparseTerms(1-100/length(corpus))
+
+inspect(text_final)
+
+```
+
 
 ### Preprocessing of Corpus
 
@@ -80,7 +212,7 @@ Writing
 #code
 ```
 
-### Creation of Term Document Matrix
+#### Prepare Labels and Features for Matrix
 
 Writing
 
@@ -88,15 +220,7 @@ Writing
 #code
 ```
 
-### Prepare Labels and Features for Matrix
-
-Writing
-
-```{r}
-#code
-```
-
-### Create Training and Test Data
+#### Create Training and Test Data
 
 Writing
 
@@ -123,3 +247,4 @@ Writing
 ### Analyze
 
 Write regarding the approach we took, any interesting insights gained over the course of the project or specific to the ham/spam emails, and provide feedback regarding how we might have improved / had a smoother approach.
+
