@@ -33,6 +33,7 @@ library(tm)
 library(wordcloud)
 library(data.table)
 library(e1071)
+library(gmodels)
 ```
 
 ### Background
@@ -118,7 +119,7 @@ dim(df_final)
 
 #Randomize our elements for better representation of proportions
 set.seed(1228)
-sf_final<- df_final[sample(nrow(df_final)),]
+df_final<- df_final[sample(nrow(df_final)),]
 str(df_final) #observe output
 
 ```
@@ -129,18 +130,18 @@ Now that we have a data frame with exclusively type and message, we can convert 
 
 ### Create and Clean Corpus
 
-We start by creating a corpus of all of our email messages and then we clean the corpus by removing punctuation, replacing non-word characters with " ", removing URLs, removing numbes, removing non-content words, removing white space, and homogenizing case for all lower case:
+We start by creating a corpus of all of our email messages and then we clean the corpus by removing URLs, homogenizing to lower case, removing numbers, removing punctuation, removing stopwords, removing non-word characters, and then stripping white space:
 
 ```{r}
 #Create corpus:
 text_corpus <- Corpus(VectorSource(df_final$messages))
 
-#Replace non-word characters:
-#clean_corpus <- text_corpus %>%
-#  
+#Remove URLs:
+removeURL <- function(x) gsub("http^\\s\\s*", "", x)%>% 
+  clean_corpus <- tm_map(text_corpus, content_transformer(removeURL))
 
 #Clean corpus:
-clean_corpus <- text_corpus %>%
+clean_corpus <- clean_corpus %>%
   tm_map(tolower) %>%
   tm_map(removeNumbers) %>%
   tm_map(removePunctuation) %>%
@@ -166,7 +167,6 @@ Note the 100% sparsity. Taking this into account, we then filter our DTM (docume
 ```{r}
 #Reduce sparsity 
 dtm_filtered <- removeSparseTerms(dtm, 0.99) 
-  #removeSparseTerms(1-10/length(clean_corpus)) #length(clean_corpus) = 3896
 inspect(dtm_filtered)
 
 ```
@@ -175,11 +175,13 @@ We now have ~95% sparsity and account for 2251 terms rather than more than 95k i
 From this point, we can revisit clean_corpus via visualization. We can make use of the wordcloud() function to visualize the most common 50 words with a minimum count of 1000. Those words are:
 
 ```{r}
-#Visualize as a wordcloud
+#Visualize (ham and spam together) as a wordcloud
 wordcloud(clean_corpus, max.words = 50, random.order = FALSE, min.freq=1000)
 
 ```
-We can note the prominence of words like "received" and "localhost" and jumbled words like "esmtp" and "dogmaslashnullorg" ... at this point we're ready to enter the final phase. We're ready to ...
+We can note the prominence of words like "received" and "localhost" and jumbled words like "esmtp" and "dogmaslashnullorg" ...
+
+At this point we're ready to enter the final phase. We're ready to ...
 
 
 ### Train and Test Data
@@ -192,6 +194,8 @@ To steal from [UC Business Analytics' site](https://uc-r.github.io/naive_bayes):
 
 First, we divide the corpus into training and test data using a proportion of 80:20. 80% training data, 20$ test dataa. We do so for our "raw" emails (from our data frame df_final), our DTM prior to accounting for sparsity,  and our cleaned corpus of documents.
 
+Because the data was stored randomly, we can simply take the first 80% of our entries as our training set and the remainder as our test set. The initial calculation of the "divider row" has been commented out (at the top of the code):
+
 ```{r}
 #Determine 80% of row number:
 ##nrow(df_final) #3896
@@ -200,7 +204,9 @@ First, we divide the corpus into training and test data using a proportion of 80
 email_raw_train <- df_final[1:3117,]
 email_raw_test <- df_final[3118:3896,]
 
-#for whatever reason text_final only sends along 6 elements ...
+#print(email_raw_train$type) #verify randomization :)
+#print(email_raw_test$type) #verify randomization
+
 email_dtm_train <- dtm[1:3117,] 
 email_dtm_test <- dtm[3118:3896,]
 
@@ -213,32 +219,23 @@ email_corpus_test <- clean_corpus[3118:3896]
 Once our data's been divided, we subset our training data based on type (spam vs. ham), identify words that appear at least five times, make use of a simple function convert_count() to detect the presence or absence of each word in a message, and then we apply this function to our training and test data:
 
 ```{r}
-
-#Separate training data into spam and ham subsets
-spam <- subset(email_raw_train, type == "spam")
-ham <- subset(email_raw_train, type == "ham")
-##do we do anything with the values of spam and ham???
-
 #Identify words that appear at least 5 times:
-five_times_words <- findFreqTerms(email_dtm_train, 5)
-length(five_times_words) #how many words are there?
-five_times_words[1:5]
+five_words <- findFreqTerms(email_dtm_train, 5)
+length(five_words) #how many words are there?
+five_words[1:5]
 
 #Create DTMs using frequent words:
-email_train <- DocumentTermMatrix(email_corpus_train, control=list(dictionary = five_times_words))
-email_test <- DocumentTermMatrix(email_corpus_test, control=list(dictionary = five_times_words))
+email_train <- DocumentTermMatrix(email_corpus_train, control=list(dictionary = five_words))
+email_test <- DocumentTermMatrix(email_corpus_test, control=list(dictionary = five_words))
 
 #Convert count info to "Yes" or "No"
 convert_count <- function(x) {
-  y <- ifelse(x > 0, 1, 0)
-  y <- factor(y, levels=c(0,1), labels=c("No", "Yes"))
-  y
+  x <- ifelse(x > 0, "Yes", "No")
 }
 
 #Convert document-term matrices:
 email_train <- apply(email_train, 2, convert_count) 
 email_test <- apply(email_test, 2, convert_count)
-
 ```
 
 From the outputs above, we see the number of words that appeared at least 5 times and we see the first five words in our corresponding list.
@@ -256,15 +253,15 @@ table(email_test_pred, factor(email_raw_test$type))
 
 ```
 
-It does not appear that our model performed well and its output was not quite in the form we were expecting. We were hoping to get a breakdown of spam and ham as outputs from our prediction but we ended up with just predictions for ham and it seems these predictions were highly inaccurate ... 
+Our (randomized) input data was 35.83% spam and 64.17% ham.
 
-Our input was randomized at a proportion of 35.83% spam, 64.17% ham ...
+As you can see above, of our 779 test documents (emails), 13.00% (65/500) were accurately labeled "ham" (the ham-ham, 1st row, 1st column entry) and 96.77% (270/279) were accurately labeled "spam" (the spam-spam, 2nd row, 2nd column entry).
 
-Even still, our prediction of ham messages had a measly accuracy of 24% (189/779), having mis-classifed spam ~76% of the time.
+Upon our first implementation of Bayes our output was only reading ham files. After going back through our code we realized that we had not randomized our input data and thus our training data was reading in primarily spam messages while our test data was only testing ham messages, so we corrected course. 
 
-We'd encountered this error after first implementing naive Bayes and tried randomizing our inputs (df_final), varying sparsity (alternating between dtm and dtm_filtered), as well as varying the order of our corpus cleaning functions. Ultimately none of these alterations improved our accuracy.
+After doing so, the output format was correct but the accuracy was still low. So we tried varying sparsity (alternating between dtm and dtm_filtered), as well as varying the order of our corpus cleaning functions. Ultimately neither of these alterations improved our accuracy.
 
-What's left, revisit the naive Bayes model itself. We'd followed the flow of our first reference (below) and it seems this exact method did not work for us and thus there must be some slight alteration needed. Possibly in the convert_count() function or in increasing the amount of appearances necessary to make it into our frequency dictionary ...
+What's left, revisit the naive Bayes model itself. We'd followed the flow of our first reference (below) and it seems this exact method did not work for us and thus there must be some slight alteration needed. Possibly in the convert_count() function or in increasing the amount of appearances necessary to make it into our frequency dictionary ... Perhaps: https://rpubs.com/dbrown/nbclass
 
 
 ### References
