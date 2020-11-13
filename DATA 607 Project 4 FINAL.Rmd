@@ -136,9 +136,12 @@ We start by creating a corpus of all of our email messages and then we clean the
 #Create corpus:
 text_corpus <- Corpus(VectorSource(df_final$messages))
 
-#Remove URLs:
+#Initialize clean_corpus by removing non-word characters and URLs:
+clean_corpus <- text_corpus %>%
+  tm_map(content_transformer(gsub), pattern="\\W",replace=" ")
+
 removeURL <- function(x) gsub("http^\\s\\s*", "", x)%>% 
-  clean_corpus <- tm_map(text_corpus, content_transformer(removeURL))
+  clean_corpus <- tm_map(clean_corpus, content_transformer(removeURL))
 
 #Clean corpus:
 clean_corpus <- clean_corpus %>%
@@ -146,7 +149,6 @@ clean_corpus <- clean_corpus %>%
   tm_map(removeNumbers) %>%
   tm_map(removePunctuation) %>%
   tm_map(removeWords, stopwords()) %>% 
-  tm_map(content_transformer(gsub), pattern="\\W",replace=" ") %>%
   tm_map(stripWhitespace)
 
 inspect(clean_corpus[1:3])
@@ -201,18 +203,18 @@ Because the data was stored randomly, we can simply take the first 80% of our en
 ##nrow(df_final) #3896
 ##round(0.8 * 3896,0) #3117
 
-email_raw_train <- df_final[1:3117,]
-email_raw_test <- df_final[3118:3896,]
+df_train <- df_final[1:3117,]
+df_test <- df_final[3118:3896,]
 
 #print(email_raw_train$type) #verify randomization :)
 #print(email_raw_test$type) #verify randomization
 
-email_dtm_train <- dtm[1:3117,] 
-email_dtm_test <- dtm[3118:3896,]
+dtm_train <- dtm[1:3117,] 
+dtm_test <- dtm[3118:3896,]
 
 #Since corpus is stored as documents:
-email_corpus_train <- clean_corpus[1:3117]
-email_corpus_test <- clean_corpus[3118:3896]
+corpus_train <- clean_corpus[1:3117]
+corpus_test <- clean_corpus[3118:3896]
 
 ```
 
@@ -220,13 +222,13 @@ Once our data's been divided, we subset our training data based on type (spam vs
 
 ```{r}
 #Identify words that appear at least 5 times:
-five_words <- findFreqTerms(email_dtm_train, 5)
+five_words <- findFreqTerms(dtm_train, 5)
 length(five_words) #how many words are there?
-five_words[1:5]
+five_words[1:5] #what are the 1st 5?
 
 #Create DTMs using frequent words:
-email_train <- DocumentTermMatrix(email_corpus_train, control=list(dictionary = five_words))
-email_test <- DocumentTermMatrix(email_corpus_test, control=list(dictionary = five_words))
+email_train <- DocumentTermMatrix(corpus_train, control=list(dictionary = five_words))
+email_test <- DocumentTermMatrix(corpus_test, control=list(dictionary = five_words))
 
 #Convert count info to "Yes" or "No"
 convert_count <- function(x) {
@@ -244,24 +246,22 @@ At this point we're ready to apply and evaluate the performance of naive Bayes. 
 
 ```{r}
 #Create naive Bayes classifier object
-email_classifier <- naiveBayes(email_train, factor(email_raw_train$type))
+email_classifier <- naiveBayes(email_train, factor(df_train$type))
 class(email_classifier) #verify the class of this classifier
 
 #Evaluate performance on test data
-email_test_pred <- predict(email_classifier, newdata=email_test)
-table(email_test_pred, factor(email_raw_test$type))
+email_pred <- predict(email_classifier, newdata=email_test)
+table(email_pred, df_test$type)
 
 ```
 
-Our (randomized) input data was 35.83% spam and 64.17% ham.
-
-As you can see above, of our 779 test documents (emails), 13.00% (65/500) were accurately labeled "ham" (the ham-ham, 1st row, 1st column entry) and 96.77% (270/279) were accurately labeled "spam" (the spam-spam, 2nd row, 2nd column entry).
+As you can see above, of our 779 test documents (emails), **84% (394/469) were accurately labeled "ham"** (the ham-ham, 1st row, 1st column entry) and **79% (244/310) were accurately labeled "spam"** (the spam-spam, 2nd row, 2nd column entry).
 
 Upon our first implementation of Bayes our output was only reading ham files. After going back through our code we realized that we had not randomized our input data and thus our training data was reading in primarily spam messages while our test data was only testing ham messages, so we corrected course. 
 
 After doing so, the output format was correct but the accuracy was still low. So we tried varying sparsity (alternating between dtm and dtm_filtered), as well as varying the order of our corpus cleaning functions. Ultimately neither of these alterations improved our accuracy.
 
-What's left, revisit the naive Bayes model itself. We'd followed the flow of our first reference (below) and it seems this exact method did not work for us and thus there must be some slight alteration needed. Possibly in the convert_count() function or in increasing the amount of appearances necessary to make it into our frequency dictionary ... Perhaps: https://rpubs.com/dbrown/nbclass
+We then altered the order of our corpus_clean section, removed the factor() function we'd input to the table() function on the last line, and simplified the convert_count() function to a simple ifelse() statement and voila! the accuracy of our ham filter went from ~13% to 84% and the accuracy of our spam filter dropped from ~90% to 78%. While we aren't sure exactly which of these "fixes" helped improve our accuracy (being that the processing time was quite slow so doing one at a time would have been too time consuming), we do know that the combination worked in improving the overall accuracy of our model.
 
 
 ### References
