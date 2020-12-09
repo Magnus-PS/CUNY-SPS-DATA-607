@@ -1,0 +1,249 @@
+---
+title: "DATA 607 Final Project"
+author: "Magnus Skonberg"
+date: "12/9/2020"
+output:
+  ioslides_presentation:
+    self_contained: true
+    widescreen: true
+    smaller: true
+---
+
+```{r load-packages, include=FALSE}
+library(tidyverse)
+library(RCurl)
+library(rvest)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(kableExtra)
+library(tm)
+library(rlist)
+library(wordcloud2)
+library(ggplot2)
+```
+
+
+## Background
+
+**Question(s):** 
+
+* What are the best Data Science companies to work for? and 
+* What are the characteristics that make them so?
+
+**Data:** 
+
+* Top Tech Companies Stock Price (.csv) and 
+* Glassdoor Company Reviews (web scrape). 
+
+*Data is properly cited in the Appendix.*
+
+**Approach:** 
+
+* Acquire and filter.
+* Tidy and transform.
+* Visualize and analyze.
+
+## Acquire and Filter (p.1)
+
+We read in the Top Tech Companies Stock Price (.csv) and then filter for companies that (1) have the highest rate of growth or (2) are of the highest value:
+
+```{r, warning=FALSE, message=FALSE}
+#Read in csv files
+tech_data <- read_csv("https://raw.githubusercontent.com/Magnus-PS/CUNY-SPS-DATA-607/Final-Project/tech_sector_list.csv")
+tech_table <- as_tibble(tech_data)
+#filter 1: "% Change"
+high_growth <- filter(tech_table, `% Change` > 0.06) #top 3
+#filter 2: "Market Cap"
+high_val <- filter(tech_table, `Market Cap (Billions)` > 1000) #top 2
+```
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE}
+#Merge data frames
+filtered <- rbind(high_growth, high_val)
+#Add "Sector" column - manually keyed in
+filtered$Sector <- c("Financial Services", "Big Data", "Semiconductor", "Big Tech", "Big Tech")
+filtered <- filtered %>%
+  select(1,2,5,8,10)
+```
+
+Filtering provides us with the following short list of companies:
+
+```{r, echo=FALSE}
+#output as kable table
+filtered %>%
+  kbl() %>%
+  kable_minimal()
+
+```
+
+
+
+## Acquire and Filter (p.2)
+
+To gain insight as to why employees like these particular companies and what might differentiate them from others, we scrape Glassdoor for the corresponding company's "Pros":
+
+```{r}
+#1. Download HTML and convert to XML with read_html()
+a <- read_html("https://www.glassdoor.com/Reviews/Apple-Reviews-E1138.htm")
+#2. Extract specific nodes with html_nodes()
+a_ext <- html_nodes(a,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+#3. Extract review text from HTML
+a_pros <- html_text(a_ext) #collect pros section of 1st 10 reviews
+```
+
+The same procedure (as that above) was applied to Microsoft, Palantir, and Square ... providing the 1st 10 reviews for each company and stored "Pros" as a list of strings. 
+
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE}
+
+###MICROSOFT###
+
+m <- read_html("https://www.glassdoor.com/Reviews/Microsoft-Reviews-E1651.htm")
+m_ext <- html_nodes(m,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+m_pros <- html_text(m_ext) #collect pros section of 1st 10 reviews
+
+###PALANTIR###
+
+p <- read_html("https://www.glassdoor.com/Reviews/Palantir-Technologies-Reviews-E236375.htm")
+p_ext <- html_nodes(p,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+p_pros <- html_text(p_ext) #collect pros section of 1st 10 reviews
+
+###SQUARE###
+
+s <- read_html("https://www.glassdoor.com/Reviews/Square-Reviews-E422050.htm")
+s_ext <- html_nodes(s,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+s_pros <- html_text(s_ext) #collect pros section of 1st 10 reviews
+
+```
+
+
+## Tidy and Transform
+
+**We want to widdle our list of strings into *only* those that are useful, defining characteristics for our top companies.**
+
+We tidy the text via regular expressions (removing non-alpha numeric characters, digits, and compressing white space) and remove common stop words.
+
+The removal of common stop words via built in stopwords() function didn't remove all non-words and non-descriptors, so we filter again. Once for low frequency (< n = 4) and again (manually) for non-word, non-descriptive entries.
+
+Our resulting table is ...
+
+```{r, echo=FALSE, results='hide', warning=FALSE, message=FALSE}
+#merge data frames
+merged_pros <- rbind(a_pros, m_pros, p_pros, s_pros)
+
+
+#Tidy text via regular expressions
+
+#Handle special characters and digits
+merged_pros <- str_replace_all(merged_pros, "[^[:alnum:]]", " ") #remove non-alpha numeric characters
+merged_pros <- str_replace_all(merged_pros, "[!^[:digit:]]", "") #remove digits
+
+#Handle white space
+merged_pros <- trimws(merged_pros)
+merged_pros <- str_replace_all(merged_pros, "\\s+", " ") #compress whitespace
+merged_pros <- str_replace_all(merged_pros, "' '", "','") #' ' ' --> ','
+
+#Remove excess characters and properly split and then re-merge the vector
+merged_pros <- str_split(merged_pros, pattern=" ") #convert vector to list at each ,
+merged_pros <- unlist(merged_pros) #convert list back to vector
+merged_pros <- tolower(merged_pros) #convert list to lowercase
+
+stopwords_regex = paste(stopwords('en'), collapse = '\\b|\\b')
+stopwords_regex = paste0('\\b', stopwords_regex, '\\b')
+merged_pros = stringr::str_replace_all(merged_pros, stopwords_regex, '')
+
+#...........................................................................
+
+#Rearrange words into a table format
+merged_pros <- as_tibble(merged_pros) #useful?
+count1 <- merged_pros %>% count(value, sort = TRUE)
+
+##Drop rows with (perceived) non-pertinent verbage:
+refined <- subset(count1, n>=4, select=c(value, n))
+
+#remove ALL non-word, non-descriptive entries
+refined$value <- as.character(refined$value)
+refined$value[refined$value == "great"] <- ""
+refined$value[refined$value == "good"] <- ""
+refined$value[refined$value == "t"] <- ""
+refined$value[refined$value == "s"] <- ""
+refined$value[refined$value == "can"] <- ""
+refined$value[refined$value == "lot"] <- ""
+refined$value[refined$value == "amazing"] <- ""
+refined$value[refined$value == "ll"] <- ""
+refined$value[refined$value == "everyone"] <- ""
+refined$value[refined$value == "everything"] <- ""
+refined$value[refined$value == "get"] <- ""
+refined$value[refined$value == "like"] <- ""
+refined$value[refined$value == "palantir"] <- ""
+refined$value[refined$value == "square"] <- ""
+refined$value[refined$value == "apple"] <- ""
+refined$value[refined$value == "ve"] <- ""
+refined$value[refined$value == "truly"] <- ""
+refined$value[refined$value == "best"] <- ""
+refined$value[refined$value == ""] <- NA
+
+#Remove NA entries
+refined<-subset(refined, (!is.na(refined[,1])) & (!is.na(refined[,2])))
+
+```
+
+## Table
+
+```{r}
+#output as kable table
+refined %>%
+  kbl() %>%
+  kable_minimal()
+
+```
+
+
+## Visualize and Analyze (1)
+
+```{r}
+#visualize the frequency count
+ggplot(refined) +
+  geom_bar(aes(reorder(value,n) , y = n, fill=value), stat = "identity", position = "dodge", width = 1) + coord_flip() +
+  theme(legend.position = "none") +
+  labs( title = "Word Count Frequency", x = "", y = "", fill = "Source")
+
+```
+
+
+## Visualize and Analyze (2)
+
+```{r}
+#word cloud
+wordcloud2(data=refined, color = "random-light", backgroundColor = "grey")
+
+```
+
+## Conclusion
+
+"The first principle is that you mustn't fool yourself and you are the easiest person to fool."
+
+--- Richard Feynman
+
+..............................................................................
+
+Thrice filtering led to our short list of top companies: **Apple, Microsoft, Palantir, and Square**. While our use of regular expressions and tidying & transforming sifted out our differentiating characteristics: **meaningful work, sense of belonging, employer care for employees, and work-life balance**.
+
+..............................................................................
+
+*How is this useful?*
+
+* Employers can align with what employees are looking for,
+* Employees can align with great employers, and
+* A similar approach could be applied elsewhere to gain similar insight.
+
+
+## Data Citation [Appendix A]
+
+Sources of data can be identified as the following (cited APA-style below):
+
+1. Tomas Mantero. (2020). **Top Tech Companies Stock Price** [.csv file]. Retrieved from https://www.kaggle.com/tomasmantero/top-tech-companies-stock-price?select=Technology+Sector+List.csv
+
+2. Glassdoor. (2020). **Glassdoor Company Reviews** [web scrape]. Retrieved from https://www.glassdoor.com/member/home/companies.htm
+
