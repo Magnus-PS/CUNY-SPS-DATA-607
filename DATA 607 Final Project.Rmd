@@ -1,0 +1,339 @@
+---
+title: "DATA 607 - Final Project"
+author: "Magnus Skonberg"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    code_folding: hide
+    df_print: paged
+    highlight: tango
+    #number_sections: yes
+    smooth_scroll: yes
+    theme: united
+    toc_collapsed: yes
+    toc_depth: 5
+    toc_float: yes
+  pdf_document:
+    extra_dependencies:
+      -geometry
+      -multicol
+      -multirow
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '5'
+    toc_float: yes
+  word_document:
+    toc: year
+    toc_depth: "5"
+theme: lumen
+number_sections: yes
+toc_depth: 3
+---
+
+
+```{r load-packages, include=FALSE}
+library(tidyverse)
+library(RCurl)
+library(rvest)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(kableExtra)
+library(tm)
+library(wordcloud2)
+library(ggplot2)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### BACKGROUND
+
+We've explored the most valuable skills as a class and discussed a number of companies over the course of the semester (Amazon, Netflix, Spotify, etc.) ... I thought it would be interesting to explore what the consensus "Best Data Science Companies" might be (if there is such a thing) and what their common characteristics might be.
+
+> What are the best Data Science companies to work for? and what are the characteristics that make them so?
+
+Upon completion of CUNY's Master's program, these overarching questions could help us tune our antenna to the proper frequencies and ultimately earn that dream job. *That's the aim right?*
+
+
+#### APPROACH
+
+In answering the question above, the following approach was followed:
+
+* Acquire tech stock data.
+* Filter for highest value (growth or market cap) companies.
+* Verify corresponding company review on Glassdoor (if < 3.5, drop).
+* For each company, scrape the "Pros" section of the top 10 reviews.
+* Tidy and transform our collection of reviews.
+* Visualize most frequent, pertinent verbage via table, barplot, and wordcloud.
+* Analyze and conclude.
+
+
+#### DATA SOURCE(S)
+
+Sources of data can be identified as the following (cited APA-style below):
+
+1. Tomas Mantero. (2020). **Top Tech Companies Stock Price** [.csv file]. Retrieved from https://www.kaggle.com/tomasmantero/top-tech-companies-stock-price?select=Technology+Sector+List.csv
+
+2. Glassdoor. (2020). **Glassdoor Company Reviews** [web scrape]. Retrieved from https://www.glassdoor.com/member/home/companies.htm
+
+ 
+### ACQUIRE DATA
+
+```{r}
+#Read in csv files
+tech_data <- read_csv("https://raw.githubusercontent.com/Magnus-PS/CUNY-SPS-DATA-607/Final-Project/tech_sector_list.csv")
+tech_table <- as_tibble(tech_data)
+#head(tech_table)
+
+sp_data <- read_csv("https://raw.githubusercontent.com/Magnus-PS/CUNY-SPS-DATA-607/Final-Project/sp500_list.csv")
+sp_table <- as_tibble(sp_data)
+#head(sp_table)
+
+#merged_df <- merge(tech_table, sp_table, by.x="Symbol", by.y="Symbol")
+#merged_df
+
+```
+We pulled in (2) different csv files: a list of the Top 100 tech companies and their corresponding market metrics as well as a list of S&P 500 companies (and corresponding sector). 
+
+From our initial exploration (head()), we see that *tech_table* holds a number of interesting variables to explore while our *sp_table*'s only real interesting addition could be its "Sector" variable. Thus we attempt a merge along column lines ("Symbol").
+
+While the initial impression of a 53 observation table with 11 variables is promising, when we look further at the "Sector" variable, we notice that 52/53 observations are "Information Technology" and thus no real new information is gained from this merge ...
+
+Because of this finding and the fact that the *sp_table* dataset's only interesting addition would have been its "Sector" variable,  I commented out the merged operation and opted to instead just explore the *tech_table* dataset.
+
+```{r}
+#EDA of table --> size, sector --> dataframe of companies
+ncol(tech_table)
+nrow(tech_table)
+summary(tech_table)
+  
+```
+We're dealing with a 9 variable, 100 observation dataset with summary statistics listed above. There are a number of ways to explore the set. 
+
+I elected to filter based on "% Change" (filter 1) and "Market Cap" (filter 2). The aim in exploring these variables is to find the companies that (1) have the highest rate of growth or (2) are of the highest value.
+
+```{r}
+#filter 1: "% Change"
+high_growth <- filter(tech_table, `% Change` > 0.06) #top 4
+
+#filter 2: "Market Cap"
+high_val <- filter(tech_table, `Market Cap (Billions)` > 1000) #top 2
+
+#Merge data frames
+filtered <- rbind(high_growth, high_val)
+
+#Add "Sector" column - manually keyed in
+filtered$Sector <- c("Financial Services", "Big Data", "Semiconductor", "Big Tech", "Big Tech")
+filtered
+
+```
+
+From our Top 100 Tech Companies list, we've filtered down to 5: 
+
+* Square, Palantir, and United Microelectronics were filtered in as the top 3 highest growth companies (with a growth percentage greater than 5%) and 
+
+* Apple and Microsoft were filtered in as BY FAR the highest value companies in our list (with a Market Cap greater than $1 trillion)
+
+We now have a shortlist to proceed to Glassdoor with. 
+
+Being that the earlier merge of dataframes incorporating a "Sector" column did not work for the purposes of this project, I elected to manually key in the sector for each of these 5 companies based on brief research into the company and an election of their overarching sector of focus.
+
+We have a cross-section of sectors within the "Tech" sector. Square provides Financial services, Palantir provides Big Data (Analytics) services, United Microelectronics manufacture semiconductors, and Apple and Microsoft develop software and applications while also developing consumer electronics ... due to the size and the breadth of their operations, they're labeled "Big Tech".
+
+With this shortlist of companies, we can proceed to scrape Glassdoor for the employment characteristics shared by these companies. 
+
+Before doing this scrape though and because it's quite an involved process, we perform one final filtration of our company's, we only consider companies with a Glassdoor review rating greater than 3.5 ... From this final filtration, we drop United Microelectronics (with a meager rating of 2.3) and proceed with just four companies.
+
+Our first attempt at scraping was via the gdscrapeR package. Attempts were made to scrape each company's Glassdoor review page and each attempt failed with a "Error in 1:maxResults : argument of length 0". After searching for solutions to this error message, it appeared to be unresolved and so we considered a new means of scraping Glassdoor.
+
+Our second attempt at scraping was via the rvest package. Reading in the webpage, identifying relevant nodes (via SelectorGadget), and then reading in the text of the 1st 10 reviews worked without a hitch:
+
+```{r}
+#FIRST ATTEMPT: gdscrapeR package
+##DID NOT WORK for Apple, Microsoft, Palantir, or Square
+
+#library(gdscrapeR)
+
+#df_a <- get_reviews(companyNum = "E1138") 
+#example of attempt to scrape Apple (19k) reviews - 19k reviews
+
+#...
+
+#SECOND ATTEMPT: rvest package (with selector gadgets)
+
+###APPLE###
+
+#1. Download HTML and convert to XML with read_html()
+a <- read_html("https://www.glassdoor.com/Reviews/Apple-Reviews-E1138.htm")
+#2. Extract specific nodes with html_nodes()
+a_ext <- html_nodes(a,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+#3. Extract review text from HTML
+a_pros <- html_text(a_ext) #collect pros section of 1st 10 reviews
+
+###MICROSOFT###
+
+m <- read_html("https://www.glassdoor.com/Reviews/Microsoft-Reviews-E1651.htm")
+m_ext <- html_nodes(m,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+m_pros <- html_text(m_ext) #collect pros section of 1st 10 reviews
+
+###PALANTIR###
+
+p <- read_html("https://www.glassdoor.com/Reviews/Palantir-Technologies-Reviews-E236375.htm")
+p_ext <- html_nodes(p,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+p_pros <- html_text(p_ext) #collect pros section of 1st 10 reviews
+
+###SQUARE###
+
+s <- read_html("https://www.glassdoor.com/Reviews/Square-Reviews-E422050.htm")
+s_ext <- html_nodes(s,'.v2__EIReviewDetailsV2__fullWidth:nth-child(1) span')
+s_pros <- html_text(s_ext) #collect pros section of 1st 10 reviews
+
+```
+
+At this point, we scraped the 1st 10 reviews for each company and stored the "Pros" section in a list of strings. The next step will be to process these strings, cut out inessential bits, and extract useful characteristics (ie. unique descriptors, nouns, etc.).
+
+
+### TIDY & TRANSFORM
+
+Our aim here is to make sense of the large list of strings (and words) that we're reading in. We want to widdle our initial list into only those that will be useful in determining differentiating characteristics for our top companies.
+
+We perform a row-wise merge of our data frames, tidy the text via regular expressions (removing non-alpha numeric characters, digits, and compressing whitespace), split and remerge our list as a vector, and remove common stop words:
+
+```{r}
+#merge data frames
+merged_pros <- rbind(a_pros, m_pros, p_pros, s_pros)
+
+#Tidy text via regular expressions
+
+#Handle special characters and digits
+merged_pros <- str_replace_all(merged_pros, "[^[:alnum:]]", " ") #remove non-alpha numeric characters
+merged_pros <- str_replace_all(merged_pros, "[!^[:digit:]]", "") #remove digits
+
+#Handle white space
+merged_pros <- trimws(merged_pros)
+merged_pros <- str_replace_all(merged_pros, "\\s+", " ") #compress whitespace
+merged_pros <- str_replace_all(merged_pros, "' '", "','") #' ' ' --> ','
+
+#Remove excess characters and properly split and then re-merge the vector
+merged_pros <- str_split(merged_pros, pattern=" ") #convert vector to list at each ,
+merged_pros <- unlist(merged_pros) #convert list back to vector
+merged_pros <- tolower(merged_pros) #convert list to lowercase
+
+stopwords_regex = paste(stopwords('en'), collapse = '\\b|\\b')
+stopwords_regex = paste0('\\b', stopwords_regex, '\\b')
+merged_pros = stringr::str_replace_all(merged_pros, stopwords_regex, '')
+
+```
+
+At this point we have a long list of words that we have to filter for meaningful characteristics. 
+
+We rearrange our words into a table format, count corresponding word frequencies, remove ALL non-word/ non-descriptive entries, and then output our (refined) result as a table:
+
+```{r}
+
+#...........................................................................
+
+#Rearrange words into a table format
+merged_pros <- as_tibble(merged_pros) #useful?
+count1 <- merged_pros %>% count(value, sort = TRUE)
+
+##Drop rows with (perceived) non-pertinent verbage:
+refined <- subset(count1, n>=4, select=c(value, n))
+
+#replace ALL non-word, non-descriptive entries as "" and then NA
+refined$value <- as.character(refined$value)
+refined$value[refined$value == "great"] <- ""
+refined$value[refined$value == "good"] <- ""
+refined$value[refined$value == "t"] <- ""
+refined$value[refined$value == "s"] <- ""
+refined$value[refined$value == "can"] <- ""
+refined$value[refined$value == "lot"] <- ""
+refined$value[refined$value == "amazing"] <- ""
+refined$value[refined$value == "ll"] <- ""
+refined$value[refined$value == "everyone"] <- ""
+refined$value[refined$value == "everything"] <- ""
+refined$value[refined$value == "get"] <- ""
+refined$value[refined$value == "like"] <- ""
+refined$value[refined$value == "palantir"] <- ""
+refined$value[refined$value == "square"] <- ""
+refined$value[refined$value == "apple"] <- ""
+refined$value[refined$value == "ve"] <- ""
+refined$value[refined$value == "truly"] <- ""
+refined$value[refined$value == "best"] <- ""
+refined$value[refined$value == ""] <- NA
+
+#Remove NA entries
+refined<-subset(refined, (!is.na(refined[,1])) & (!is.na(refined[,2])))
+
+#output as kable table
+refined %>%
+  kbl() %>%
+  kable_minimal()
+
+```
+
+The resulting kable table is visually pleasing and useful for observing word frequency. With that said, skimming this list for possible relationships between words (ie. to find overarching differentiating characteristics) could be tedious and prone to error. 
+
+Thus, we explore (2) more visualizations ...
+
+
+### VISUALIZE & ANALYZE
+
+While we've seen some of the words in our filtered list, as well as their corresponding frequencies, it could be useful to see this information in different forms. 
+
+We'll explore the barplot and wordcloud representation of word frequency:
+
+```{r}
+#visualize the frequency count
+ggplot(refined) +
+  geom_bar(aes(reorder(value,n) , y = n, fill=value), stat = "identity", position = "dodge", width = 1) + coord_flip() +
+  theme(legend.position = "none") +
+  labs( title = "Word Count Frequency", x = "", y = "", fill = "Source")
+
+```
+
+From the above plot, we get an idea of the most popular (pertinent) terms that employees responded with when describing the positives of their company.
+
+Our top 4 include "work", "people", company", and "benefits" which overlap in certain areas but also indicate some overarching characteristics. If we go further down the list, we observe terms like "perks" which is a "benefit" , and words like "culture", "smart", and "mission" which can be taken as descriptors of the company and/or its environment.
+
+With a wordcloud visualization, we hope to gain further clarity regarding the relationship between positive descriptors and their frequency:
+
+```{r}
+#word cloud
+wordcloud2(data=refined, color = "random-light", backgroundColor = "grey")
+
+```
+The format and colors are pleasing to the eye and the use of magnitude / size to represent frequency makes the exploration of differentiating characteristics quite simple:
+
+* Terms like "work", "mission", "working", and "job" indicate that these companies offer **meaningful work**. Employees feel like they're building toward something greater than themselves.
+
+* Terms like "people", company", "culture", and "employees" indicate that employees of these companies feel a **sense of belonging**. They feel like they're a part of something and like their opinion matters.
+
+* Terms like "benefits", "perks", and "compensation" indicate that these companies **take care of their employees** (not just in word but in deed).
+
+* Whereas terms like "balance" and "life" indicate that there's a **work-life balance** component and that these companies respect their employee's lives outside of work.
+
+These four characteristics appear to capture the over-arching differentiating factors of our top Data Science companies.
+
+
+### CONCLUDE
+
+At this point we can return to the question at hand:
+
+> What are the best Data Science companies to work for? and what are the characteristics that make them so?
+
+* **Top companies:** Apple, Microsoft, Palantir and Square. 
+* **Differentiating characteristics:** meaningful work, sense of belonging, employer care for employees, and work-life balance.
+
+The importance / usefulness of these findings would depend upon the individual. Employers can tune their mission, culture, and compensation packages to allure higher and higher level employees while employees now have an idea of "what's out there?". 
+
+For those uncertain as to what direction to head or what their specialty might be, why not choose a great place to work? That way, at least they have a better chance in enjoying their day-to-day as they gain clarity and experience. 
+
+On the other hand, their might be graduates or career-changers that don't want to join a larger (publicly traded) company, they either want to form a small, highly tuned team or join one. For these individuals, they can note just the differentiating characteristics and sculpt their environment into one that is more productive and alluring. 
+
+Word spreads, and a *long term* focus on the right characteristics could pay off handsomely whether employer or employee.
